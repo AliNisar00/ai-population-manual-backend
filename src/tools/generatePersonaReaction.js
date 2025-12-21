@@ -50,8 +50,10 @@ export const generatePersonaReactions = tool(
         `Processing ${batchRequests.length} persona reactions in batches of 10...`
       );
 
-      for (let i = 0; i < batchRequests.length; i += 10) {
-        const batch = batchRequests.slice(i, i + 10);
+      // for (let i = 0; i < batchRequests.length; i += 10) {
+      //   const batch = batchRequests.slice(i, i + 10);
+      for (let i = 0; i < batchRequests.length; i++) {
+        const batch = [batchRequests[i]]; // one persona per call
         console.log(
           `Batch ${Math.floor(i / 10) + 1}/${Math.ceil(
             batchRequests.length / 10
@@ -100,6 +102,11 @@ Tone Characteristics:
 
         try {
           const result = await llm.invoke(message);
+
+          console.log("=== RAW GEMINI OUTPUT ===");
+          console.log(result.content);
+          console.log("=========================");
+
           const lines = result.content.split("\n");
 
           batch.forEach((request, index) => {
