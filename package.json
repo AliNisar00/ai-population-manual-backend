@@ -11,16 +11,18 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@langchain/core": "^0.3.57",
+    "@langchain/google-genai": "^0.2.10",
+    "@langchain/langgraph": "^0.3.0",
+    "@langchain/openai": "^0.5.12",
+    "axios": "^1.9.0",
     "body-parser": "^2.2.1",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
+    "langsmith": "^0.4.0",
     "mysql2": "^3.15.3",
-    "@langchain/core": "^0.3.57",
-    "@langchain/langgraph": "^0.3.0",
-    "@langchain/openai": "^0.5.12",
-    "@langchain/google-genai": "^0.2.10",
-    "axios": "^1.9.0",
+    "node-fetch": "^3.3.2",
     "nodemon": "^3.1.10",
     "zod": "^3.25.51"
   }

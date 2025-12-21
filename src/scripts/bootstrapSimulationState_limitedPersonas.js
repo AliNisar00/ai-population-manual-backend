@@ -1,3 +1,4 @@
+import { traceable } from "langsmith/traceable";
 import { getClustersWithData } from "../services/clusterService.js";
 import {
   clusterResults,
@@ -6,57 +7,67 @@ import {
 } from "../global/index.js";
 
 /**
- * Populates legacy global simulation state using the manual backend.
- * This recreates the runtime assumptions of the old LLM pipeline.
- * But compared to the regular bootstrapSimulationState.js, this file limits personas to 
- * the specified number provided at the time of calling to allow simulation pipeline to work
- * with LLMs on free tier.
+ * Bootstraps legacy global simulation state
+ * with an optional persona limit (for free-tier safety).
  */
 
-export async function bootstrapSimulationState_limitedPersonas({ campaignId, personaLimit }) {
-  console.log("Bootstrapping simulation global state...");
+export const bootstrapSimulationState_limitedPersonas = traceable(
+  async ({ campaignId, personaLimit }) => {
+    console.log("Bootstrapping simulation global state...");
 
-  const { clusters } = await getClustersWithData();
-  if (!clusters || clusters.length === 0) {
-    throw new Error("No clusters available to bootstrap simulation state.");
-  }
+    const { clusters } = await getClustersWithData();
+    if (!clusters || clusters.length === 0) {
+      throw new Error("No clusters available to bootstrap simulation state.");
+    }
 
-  // Keep track of total personas added
-  let personasAdded = 0;
+    let personasAdded = 0;
+    const transformedClusters = [];
 
-  const transformedClusters = clusters.map((cluster) => {
-    const remaining = personaLimit ? personaLimit - personasAdded : Infinity;
+    for (const cluster of clusters) {
+      if (personaLimit && personasAdded >= personaLimit) break;
 
-    // Slice personas to respect limit
-    const limitedPersonas = cluster.personas.slice(0, remaining);
+      const remaining =
+        personaLimit ? personaLimit - personasAdded : Infinity;
 
-    personasAdded += limitedPersonas.length;
+      const limitedPersonas = cluster.personas.slice(0, remaining);
 
-    return {
-      cluster_id: cluster.cluster_id,
-      personas: limitedPersonas.map((p) => ({
-        persona_id: p.persona_id,
-        name: p.name,
-        description: p.description,
-        age: p.age,
-        gender: p.gender,
-        education: p.education,
-        region: p.region,
-        city: p.city,
-        religion: p.religion,
-        languages: p.languages,
-        literacy: p.literacy,
-        tone: p.tone ?? null,
-      })),
+      if (limitedPersonas.length === 0) continue;
+
+      personasAdded += limitedPersonas.length;
+
+      transformedClusters.push({
+        cluster_id: cluster.cluster_id,
+        personas: limitedPersonas.map((p) => ({
+          persona_id: p.persona_id,
+          name: p.name,
+          description: p.description,
+          age: p.age,
+          gender: p.gender,
+          education: p.education,
+          region: p.region,
+          city: p.city,
+          religion: p.religion,
+          languages: p.languages,
+          literacy: p.literacy,
+          tone: p.tone ?? null,
+        })),
+      });
+    }
+
+    clusterResults.value = {
+      campaignId,
+      clusters: transformedClusters,
     };
-  });
 
-  clusterResults.value = { campaignId, clusters: transformedClusters };
-  clusterReactions.value.length = 0;
-  personaReactions.value.length = 0;
+    clusterReactions.value.length = 0;
+    personaReactions.value.length = 0;
 
-  console.log(
-    `Simulation state ready: ${transformedClusters.length} clusters, ` +
-      `${transformedClusters.reduce((sum, c) => sum + c.personas.length, 0)} personas`
-  );
-}
+    console.log(
+      `Simulation state ready: ${transformedClusters.length} clusters, ${personasAdded} personas`
+    );
+  },
+  {
+    name: "bootstrap_simulation_state_limited",
+    tags: ["bootstrap", "state"],
+  }
+);

@@ -5,6 +5,7 @@ import { z } from "zod";
 // import { cluster_reactions } from "../base.js";
 // import { personaReactions } from "../simulationResults.js";
 import { personaReactions } from "../global/index.js";
+import { traceable } from "langsmith/traceable";
 
 config();
 let count = 0;
@@ -52,7 +53,8 @@ function mapEmotionToSentiment(emotion) {
 }
 
 export const emotionalAnalyzer = tool(
-  async () => {
+  traceable(
+    async () => {
     const results = [];
     const processedReactions = new Set();
 
@@ -86,7 +88,11 @@ export const emotionalAnalyzer = tool(
     }
     console.log(count);
     return results;
-  },
+    },
+    {
+      name: "emotional_analyzer",
+    }
+  ),
   {
     name: "emotional_analyzer",
     description:
