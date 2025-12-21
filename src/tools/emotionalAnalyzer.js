@@ -12,7 +12,7 @@ let count = 0;
 
 async function classifyEmotion(text) {
   const apiUrl =
-    "https://api-inference.huggingface.co/models/j-hartmann/emotion-english-distilroberta-base";
+    "https://router.huggingface.co/hf-inference/models/j-hartmann/emotion-english-distilroberta-base";
 
   const response = await fetch(apiUrl, {
     method: "POST",
