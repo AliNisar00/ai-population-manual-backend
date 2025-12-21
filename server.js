@@ -5,6 +5,7 @@ import { config } from "dotenv";
 
 import clusterRoutes from "./src/routes/clusterRoutes.js";
 import simulationRoutes from "./src/routes/simulationRoutes.js";
+import personaChatRoutes from "./src/routes/personaChatRoutes.js";
 
 config();
 
@@ -28,6 +29,7 @@ app.get("/", (req, res) => {
 
 app.use("/clusters", clusterRoutes);
 app.use("/simulation", simulationRoutes);
+app.use("/persona_chat", personaChatRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
