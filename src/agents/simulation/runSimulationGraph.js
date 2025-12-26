@@ -1,6 +1,20 @@
-import { HumanMessage } from "@langchain/core/messages";
+// src/agents/simulation/simulationGraph.js
 import { simulationAgent, simulationToolNode } from "./simulationAgent.js";
-import { StateGraph, MessagesAnnotation } from "@langchain/langgraph";
+import { StateGraph, Annotation } from "@langchain/langgraph";
+import { MessagesAnnotation } from "@langchain/langgraph";
+
+// Extend MessagesAnnotation to include simulation metadata
+const SimulationState = Annotation.Root({
+  ...MessagesAnnotation.spec,
+  simulationRunId: Annotation({
+    reducer: (x, y) => y ?? x,
+    default: () => null,
+  }),
+  campaignId: Annotation({
+    reducer: (x, y) => y ?? x,
+    default: () => null,
+  }),
+});
 
 function shouldContinue(state) {
   const lastMessage = state.messages.at(-1);
@@ -10,7 +24,7 @@ function shouldContinue(state) {
   return "__end__";
 }
 
-export const compiledSimulationGraph = new StateGraph(MessagesAnnotation)
+export const compiledSimulationGraph = new StateGraph(SimulationState)
   .addNode("simulationAgent", simulationAgent)
   .addNode("simulationToolNode", simulationToolNode)
   .addEdge("__start__", "simulationAgent")
@@ -20,18 +34,4 @@ export const compiledSimulationGraph = new StateGraph(MessagesAnnotation)
   })
   .addEdge("simulationToolNode", "simulationAgent")
   .compile();
-
-// const prompt = new HumanMessage({
-//   content: [
-//     {
-//       type: "text",
-//       text: `Get a detailed description of the ad image. cover everything including content, tone, triggers, genre, product, colors, text, picture, feel, strategies etc. and simulate reaction.`,
-//     },
-//     {
-//       type: "image_url",
-//       image_url: { url: imageBase64 },
-//     },
-//   ],
-// });
-
-// const result = await builder.invoke({ messages: [prompt] });
+  

@@ -1,54 +1,97 @@
+// src/tools/simulateAdvertisementReaction.js
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { HumanMessage } from "@langchain/core/messages";
-import { clusterResults } from "../global/index.js";
+import { clusterResults, clusterReactions } from "../global/index.js";
 import { config } from "dotenv";
-import { clusterReactions } from "../global/index.js";
 import { traceable } from "langsmith/traceable";
+import { apiRotator } from "../services/apiRotator.js";
+import {
+  saveClusterReaction,
+  updateSimulationRun,
+} from "../services/simulationDbService.js";
 
 config();
 
 export const simulateAdvertisementReaction = tool(
   traceable(
-    async ({ adDescription }) => {
+    async ({ adDescription }, { metadata }) => {
       clusterReactions.value.length = 0;
 
-      const llm = new ChatGoogleGenerativeAI({
-        model: "gemini-2.5-flash",
-        maxOutputTokens: 512,
-        apiKey: process.env.GEMINI_API_KEY,
-      });
-      console.log("clustersResults: ", clusterResults);
-      const results = [];
-      let count = 0;
+      const { simulationRunId, campaignId } = metadata || {};
 
-      for (const cluster of clusterResults.value?.clusters || []) {
+      if (!simulationRunId || !campaignId) {
+        throw new Error("simulationRunId and campaignId required in metadata");
+      }
+
+      console.log("\nGenerating cluster-level reactions...\n");
+
+      const results = [];
+      const totalClusters = clusterResults.value?.clusters?.length || 0;
+
+      for (let i = 0; i < totalClusters; i++) {
+        const cluster = clusterResults.value.clusters[i];
         const personaString = cluster.personas[0]?.description;
 
-        count++;
-        const message = [
-          new HumanMessage({
-            content: [
-              {
-                type: "text",
-                text: `Given the ad description "${adDescription}", simulate a reaction from this persona: ${personaString}. Give a reaction based on their demographic data. Only return the raw reaction as a string.`,
-              },
-            ],
-          }),
-        ];
+        console.log(
+          `Processing cluster ${i + 1}/${totalClusters} (ID: ${cluster.cluster_id})`
+        );
 
-        const result = await llm.invoke(message);
-
-        clusterReactions.value.push({
-          cluster: cluster.cluster_id,
-          reaction: result.content,
+        // Update progress
+        await updateSimulationRun(simulationRunId, {
+          currentStep: `Generating cluster reactions (${i + 1}/${totalClusters})`,
         });
 
-        if (count < 2) {
-          results.push(result.content);
+        const message = [
+          new HumanMessage(
+            `Given the ad description "${adDescription}", simulate a reaction from this persona: ${personaString}. Give a reaction based on their demographic data. Only return the raw reaction as a string.`
+          ),
+        ];
+        
+        try {
+          const result = await apiRotator.invoke(message);
+
+          const reaction = result.content;
+
+          // Save to DB
+          await saveClusterReaction(
+            simulationRunId,
+            campaignId,
+            cluster.cluster_id,
+            reaction
+          );
+
+          // Also keep in memory for backward compatibility
+          clusterReactions.value.push({
+            cluster: cluster.cluster_id,
+            reaction: reaction,
+          });
+
+          if (i < 2) {
+            results.push(reaction);
+          }
+
+          console.log(`Cluster ${cluster.cluster_id} reaction generated`);
+        } catch (error) {
+          console.error(`Error with cluster ${cluster.cluster_id}:`, error.message);
+          
+          // Save error reaction
+          const errorReaction = "Error generating reaction";
+          await saveClusterReaction(
+            simulationRunId,
+            campaignId,
+            cluster.cluster_id,
+            errorReaction
+          );
+
+          clusterReactions.value.push({
+            cluster: cluster.cluster_id,
+            reaction: errorReaction,
+          });
         }
       }
+
+      console.log(`\nGenerated ${totalClusters} cluster reactions\n`);
 
       return results;
     },

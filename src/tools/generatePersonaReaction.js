@@ -1,6 +1,6 @@
+// src/tools/generatePersonaReaction.js
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { HumanMessage } from "@langchain/core/messages";
 import {
   clusterResults,
@@ -9,25 +9,32 @@ import {
 } from "../global/index.js";
 import { config } from "dotenv";
 import { traceable } from "langsmith/traceable";
+import { apiRotator } from "../services/apiRotator.js";
+import {
+  savePersonaReaction,
+  updateSimulationRun,
+} from "../services/simulationDbService.js";
 
 config();
 
 export const generatePersonaReactions = tool(
   traceable(
-    async () => {
-      console.log("Using cluster reactions from first tool...");
+    async ({}, { metadata }) => {
+      console.log("\nGenerating persona-level reactions...\n");
+      
       personaReactions.value.length = 0;
+
+      const { simulationRunId, campaignId } = metadata || {};
+
+      if (!simulationRunId || !campaignId) {
+        throw new Error("simulationRunId and campaignId required in metadata");
+      }
 
       if (clusterReactions.value.length === 0) {
         return "No cluster reactions available. Please run simulate_persona_reaction first.";
       }
 
-      const llm = new ChatGoogleGenerativeAI({
-        model: "gemini-2.5-flash",
-        maxOutputTokens: 512,
-        apiKey: process.env.GEMINI_API_KEY,
-      });
-
+      // Build batch of all personas
       const batchRequests = [];
 
       clusterReactions.value.forEach((clusterReaction) => {
@@ -46,25 +53,29 @@ export const generatePersonaReactions = tool(
         }
       });
 
-      console.log(
-        `Processing ${batchRequests.length} persona reactions in batches of 10...`
-      );
+      const totalPersonas = batchRequests.length;
+      console.log(`Processing ${totalPersonas} total personas...\n`);
 
-      // for (let i = 0; i < batchRequests.length; i += 10) {
-      //   const batch = batchRequests.slice(i, i + 10);
+      // Process one persona at a time with API rotation
       for (let i = 0; i < batchRequests.length; i++) {
-        const batch = [batchRequests[i]]; // one persona per call
+        const request = batchRequests[i];
+        const tone = request.persona.tone;
+
         console.log(
-          `Batch ${Math.floor(i / 10) + 1}/${Math.ceil(
-            batchRequests.length / 10
-          )}`
+          `Processing persona ${i + 1}/${totalPersonas}: ${request.persona.name} (${request.personaId})`
         );
 
-        let batchPrompt = `Given the cluster reaction: "${batch[0].clusterReaction}"\n\nGenerate personalized reactions for the following personas:\n\n`;
+        // Update progress in DB
+        await updateSimulationRun(simulationRunId, {
+          processedPersonas: i,
+          currentStep: `Generating persona reactions (${i + 1}/${totalPersonas})`,
+        });
 
-        batch.forEach((request, index) => {
-          const tone = request.persona.tone;
-          batchPrompt += `${index + 1}. Persona: ${request.persona.name}
+        const prompt = `Given the cluster reaction: "${request.clusterReaction}"
+
+Generate a personalized reaction for this persona:
+
+Name: ${request.persona.name}
 Description: ${request.persona.description}
 Tone Characteristics:
 - Emotional responsiveness: ${tone?.emotional_responsiveness ?? "neutral"}
@@ -73,77 +84,89 @@ Tone Characteristics:
 - Language mix: ${tone?.language_mix ?? "neutral"}
 - Attitude towards ads: ${tone?.attitude_towards_ads ?? "neutral"}
 - Positive triggers: ${
-            tone?.key_reaction_triggers?.positive?.join(", ") ?? "N/A"
-          }
+          tone?.key_reaction_triggers?.positive?.join(", ") ?? "N/A"
+        }
 - Negative triggers: ${
-            tone?.key_reaction_triggers?.negative?.join(", ") ?? "N/A"
-          }
+          tone?.key_reaction_triggers?.negative?.join(", ") ?? "N/A"
+        }
 
-`;
-        });
-
-        batchPrompt += `Return responses in this exact format:\n\n`;
-        batch.forEach((request, index) => {
-          batchPrompt += `PERSONA_${index + 1}: [reaction for ${
-            request.persona.name
-          }]\n`;
-        });
+Return ONLY the raw reaction text, nothing else.`;
 
         const message = [
-          new HumanMessage({
-            content: [
-              {
-                type: "text",
-                text: batchPrompt,
-              },
-            ],
-          }),
+          new HumanMessage(prompt)
         ];
 
         try {
-          const result = await llm.invoke(message);
+          const result = await apiRotator.invoke(message);
+          const reaction = result.content.trim();
 
-          console.log("=== RAW GEMINI OUTPUT ===");
-          console.log(result.content);
-          console.log("=========================");
-
-          const lines = result.content.split("\n");
-
-          batch.forEach((request, index) => {
-            const key = `PERSONA_${index + 1}:`;
-            const line = lines.find((l) => l.startsWith(key));
-            const reaction = line
-              ? line.replace(key, "").trim()
-              : "Failed to parse reaction";
-
-            personaReactions.value.push({
-              cluster_id: request.clusterId,
-              persona_id: request.personaId,
-              personaName: request.persona.name,
-              reaction,
-            });
+          // Save to DB immediately
+          await savePersonaReaction({
+            simulationRunId,
+            campaignId,
+            clusterId: request.clusterId,
+            personaId: request.personaId,
+            personaName: request.persona.name,
+            rawReaction: reaction,
           });
 
-          console.log(`✅ Processed ${batch.length} personas in this batch`);
+          // Also keep in memory for emotional analyzer
+          personaReactions.value.push({
+            cluster_id: request.clusterId,
+            persona_id: request.personaId,
+            personaName: request.persona.name,
+            reaction,
+          });
 
-          if (i + 10 < batchRequests.length) {
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-          }
+          console.log(`Persona ${request.personaId} reaction saved`);
         } catch (err) {
-          console.error("❌ Error processing batch:", err);
-          batch.forEach((request) => {
-            personaReactions.value.push({
-              cluster_id: request.clusterId,
-              persona_id: request.personaId,
-              personaName: request.persona.name,
-              reaction: "Error generating reaction",
-            });
+          console.error(
+            `Error processing persona ${request.personaId}:`,
+            err.message
+          );
+
+          // Save error reaction
+          await savePersonaReaction({
+            simulationRunId,
+            campaignId,
+            clusterId: request.clusterId,
+            personaId: request.personaId,
+            personaName: request.persona.name,
+            rawReaction: "Error generating reaction",
           });
+
+          personaReactions.value.push({
+            cluster_id: request.clusterId,
+            persona_id: request.personaId,
+            personaName: request.persona.name,
+            reaction: "Error generating reaction",
+          });
+        }
+
+        // Log progress every 50 personas
+        if ((i + 1) % 50 === 0 || i + 1 === totalPersonas) {
+          const percent = Math.round(((i + 1) / totalPersonas) * 100);
+          const apiStatus = apiRotator.getStatus();
+          
+          console.log(`\nProgress: ${i + 1}/${totalPersonas} (${percent}%)`);
+          console.log("API Status:");
+          apiStatus.forEach((api) => {
+            console.log(
+              `   API ${api.id} (${api.type}): ${api.requestsThisMinute}/${api.rpm} RPM, ${api.requestsToday}/${api.rpd} RPD`
+            );
+          });
+          console.log("");
         }
       }
 
-      console.log(`🎯 Total Persona Reactions: ${personaReactions.value.length}`);
-      return `Generated ${personaReactions.value.length} persona reactions based on fresh cluster reactions`;
+      // Final update
+      await updateSimulationRun(simulationRunId, {
+        processedPersonas: totalPersonas,
+      });
+
+      console.log(`\nAll ${totalPersonas} persona reactions generated!\n`);
+
+      return `Generated ${personaReactions.value.length} persona reactions based on cluster reactions`;
     },
     { name: "generate_persona_reactions", tags: ["tool", "simulation"] }
   ),
